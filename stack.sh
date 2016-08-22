@@ -2,10 +2,6 @@
 # Copyright 2016 Jan Chren (rindeal)
 # Distributed under the terms of the BSD 3-Clause licence
 
-__stack::get_id() {
-    eval "${2:-"_sid"}=\"${FUNCNAME[${1}]%.*}\""
-}
-
 __stack::size() {
     local _stack_id="${1?"${FUNCNAME}: error"}"
     local _size
