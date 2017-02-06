@@ -1,106 +1,167 @@
 #!/bin/bash
-# Copyright 2016 Jan Chren (rindeal)
+# Copyright 2016-2017 Jan Chren (rindeal)
 # Distributed under the terms of the BSD 3-Clause licence
 
-_stack::size() {
-    local __size_sid="${1?"${FUNCNAME}: error"}" __size_res_var="${2}"
-    local __size_sz
+# NOTE: this function must not contain any variables to prevent shadowing
+@type() {
+    if ! [[ "$(declare -p "${1}" 2>/dev/null)" =~ declare[[:space:]]-(.).* ]] ; then
+        echo "${FUNCNAME}: Error: unknown type" &>2
+        return 1
+    fi
 
-    eval "${__size_res_var:-"__size_sz"}=\"\${#${__size_sid}[@]}\""
-    (($?)) && { echo "${FUNCNAME}: Error: assign returned an error" >&2; return 1; }
-
-    [[ -n "${__size_res_var}" ]] || printf '%s\n' "${__size_sz}"
+    case "${BASH_REMATCH[1]}" in
+    '-'|'r')    echo - ;;
+    'i')  echo i ;;
+    'a')  echo a ;;
+    'A')  echo A ;;
+    *)
+        echo "${FUNCNAME}: Error: unknown type '${BASH_REMATCH[1]}'" &>2
+        return 1
+        ;;
+    esac
 }
 
-_stack::push() {
-    local __push_sid="${1?"${FUNCNAME}: error"}"
+# NOTE: __out_v is the only shadowable variable
+@out() {
+    (($# != 3)) && { echo "${FUNCNAME}: error"; return 1; }
+
+    # set case
+    if [[ "${1}" =~ ^[1-9]$ ]] ; then
+        unset __out_${1}
+        local __out_v="$(declare -p "${3}")"
+        eval declare -g -$(@type "${3}") __out_${1}="${__out_v#*=}" || return 1
+
+    # get case
+    elif [[ "${3}" =~ ^[1-9]$ ]] ; then
+        if [[ "${1}" == '-' ]] ; then
+            eval "printf '%s\n' \"\${__out_${3}}\""
+        else
+            local __out_v="$(declare -p "__out_${3}")"
+            eval eval ${1}="${__out_v#*=}" || return 1
+        fi
+        unset __out_${3}
+
+    # error case
+    else
+        echo "${FUNCNAME}: error"
+        return 1
+    fi
+
+    return 0
+}
+
+_stack:size() {
+    local sid="${1?"${FUNCNAME}: error"}"
+
+    eval "declare -i size=\${#${sid}[@]}"
+    (($?)) && { echo "${FUNCNAME}: Error: assign returned an error" >&2; return 1; }
+
+    [[ "${!#}" == '-' ]] && echo "${size}"
+    @out 1 = size
+}
+
+_stack:push() {
+    local sid="${1?"${FUNCNAME}: error"}"
     shift
-    eval "${__push_sid}+=( \"\${@}\" )"
+    eval "${sid}+=( \"\${@}\" )"
     (($?)) && { echo "${FUNCNAME}: Error: assign returned an error" >&2; return 1; }
 }
 
-_stack::top() {
-    local __top_sid="${1?"${FUNCNAME}: error"}" __top_res_var="${2}"
-    local __top_i=-1 __top_val
+_stack:top() {
+    local sid="${1?"${FUNCNAME}: error"}"
+    local val
 
-    _stack::size "${__top_sid}" __top_i
-    # bash arrays are indexed from zero
-    ((--__top_i < 0)) && \
+    declare -i i=
+    _stack:size "${sid}"
+    @out i = 1
+
+    # --i = bash arrays are indexed from zero
+    ((--i < 0)) && \
         { echo "${FUNCNAME}: Error: stack is empty" >&2; return 1; }
 
-    eval "${__top_res_var:-"__top_val"}=\"\${${__top_sid}[${__top_i}]}\""
+    eval "val=\"\${${sid}[${i}]}\""
     (($?)) && { echo "${FUNCNAME}: Error: assign returned an error" >&2; return 1; }
 
-    [[ -n "${__top_res_var}" ]] || printf '%s\n' "${__top_val}"
+    [[ "${!#}" == '-' ]] && printf '%s\n' "${val}"
+    @out 1 = val
 }
 
-_stack::pop() {
-    local __pop_sid="${1?"${FUNCNAME}: error"}" __pop_res_var="${2}"
-    local __pop_i=-1
-    _stack::size "${__pop_sid}" __pop_i
+_stack:pop() {
+    local sid="${1?"${FUNCNAME}: error"}"
+    declare -i i=
+    _stack:size "${sid}"
+    @out i = 1
+
     # bash arrays are indexed from zero
-    ((--__pop_i < 0)) && \
+    ((--i < 0)) && \
         { echo "${FUNCNAME}: Error: stack is empty" >&2; return 1; }
 
-    local __pop_val
-    _stack::top "${__pop_sid}" "${__pop_res_var:-"__pop_val"}"
-    (($?)) && { echo "${FUNCNAME}: Error: ::top returned an error" >&2; return 1; }
+    local val
+    _stack:top "${sid}"
+    (($?)) && { echo "${FUNCNAME}: Error: :top returned an error" >&2; return 1; }
+    @out val = 1
 
-    unset ${__pop_sid}[${__pop_i}]
+    unset ${sid}[${i}]
     (($?)) && { echo "${FUNCNAME}: Error: unset returned an error" >&2; return 1; }
 
-    [[ -n "${__pop_res_var}" ]] || printf '%s\n' "${__pop_val}"
+    [[ "${!#}" == '-' ]] && printf '%s\n' "${val}"
+    @out 1 = val
 }
 
-__stack::methods() {
-    local __methods_line __methods_methods=() __methods_regex="declare -f _stack::(.*)"
-    while read -r __methods_line ; do
-        if [[ "${__methods_line}" =~ ${__methods_regex} ]] ; then
-            __methods_methods+=( "${BASH_REMATCH[1]}" )
-        fi
-    done < <( typeset -F )
-    echo "${__methods_methods[@]}"
+__stack:methods() {
+    local line methods=() regex="declare -f (.*)"
+
+    while read -r line ; do
+        methods+=( "${line#*:}" )
+    done < <( compgen -A function -X '!_stack:*' )
+
+    [[ "${!#}" == '-' ]] && echo "${methods[@]}"
+    @out 1 = methods
 }
 
-_stack::destroy() {
-    local __destroy_sid="${1?"${FUNCNAME}: error"}"
+_stack:destroy() {
+    local sid="${1?"${FUNCNAME}: error"}"
 
     ## destroy wrapper funcs
-    local __destroy_methods=( $(__stack::methods) )
-    unset -f "${__destroy_methods[@]/#/"${__destroy_sid}."}"
+    declare -a methods=()
+    __stack:methods
+    @out methods = 1
+    unset -f "${methods[@]/#/"${sid}."}"
     (($?)) && { echo "${FUNCNAME}: Error: unsetting functions returned an error" >&2; return 1; }
 
     ## destroy the variable holding our stack
-    unset "${__destroy_sid}"
-    (($?)) && { echo "${FUNCNAME}: Error: unsetting __destroy_sid returned an error" >&2; return 1; }
+    unset "${sid}"
+    (($?)) && { echo "${FUNCNAME}: Error: unsetting sid returned an error" >&2; return 1; }
 }
 
-stack::new() {
-    local __new_ret_var="${1?"${FUNCNAME}: error"}"
-    local __new_sid
+stack:new() {
+    local ret_var="${1?"${FUNCNAME}: error"}"
+    declare -- sid
 
     ## generate stack id
     while (( 1 )) ; do
-        __new_sid="__stack_oop_${FUNCNAME[1]}_$((RANDOM*RANDOM))"
-        if ! declare -p "${__new_sid}" &>/dev/null ; then
+        sid="__stack_oop_${FUNCNAME[1]}_$((RANDOM*RANDOM))"
+        if ! declare -p "${sid}" &>/dev/null ; then
             break
         fi
     done
 
     # create array holding our stack
-    eval "declare -g -a ${__new_sid}=()"
+    eval "declare -g -a ${sid}=()"
 
     ## generate wrappers
-    local __new_m
-    for __new_m in $(__stack::methods) ; do
+    __stack:methods
+    local m _methods
+    @out _methods = 1
+    for m in "${_methods[@]}" ; do
         eval "
-            ${__new_sid}.${__new_m}(){
-                _stack::${__new_m} '${__new_sid}' \"\${@}\"
+            ${sid}.${m}() {
+                _stack:${m} '${sid}' \"\${@}\"
             }
         "
     done
 
     ## And finally assign the id to the variable.
-    ## This will allow calling functions like `${__new_ret_var}.method`
-    eval "${__new_ret_var}='${__new_sid}'"
+    ## This will allow calling functions like `${ret_var}.method`
+    eval "${ret_var}='${sid}'"
 }
